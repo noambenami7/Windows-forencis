@@ -1,0 +1,289 @@
+#!/bin/bash
+
+start_time=$(date +"%Y-%m-%d %H:%M:%S")
+found_files=0
+echo "[#] Analysis started at: $start_time"
+
+
+function root () { 
+	
+ user=$(whoami)
+
+if [ "$user" == "root" ]; 
+	then
+		echo "[#] you runing as root."
+    else
+		echo "you mast be in root to start the script"
+     exit 
+fi
+
+}
+
+function check_file_exists() {
+    
+    read -rp "[#] Enter the filename: " filename
+    
+    file_path=$(sudo find / -type f -name "$filename" 2>/dev/null)
+   
+    if sudo find / -name "$filename" &>/dev/null; 
+	then
+        echo "[#] File '$filename' is not exists."
+    else
+        echo "[#] File '$filename' exist."
+    fi
+}
+
+
+function nba1() {
+  if ! command -v bulk_extractor &>/dev/null; then
+    sudo apt-get install bulk_extractor -qq -y > /dev/null 2>&1
+  else
+    echo [#] "bulk_extractor is already installed."
+  fi
+  
+ 
+  if ! command -v foremost &>/dev/null; then
+    sudo apt-get install foremost -qq -y > /dev/null 2>&1
+  else
+    echo [#] "foremost is already installed."
+  fi
+  
+  if ! command -v binwalk &>/dev/null; then
+    sudo apt-get install binwalk -qq -y > /dev/null 2>&1
+  else
+    echo [#] "bimwalk is already installed."
+  fi
+  
+   if ! command -v strings &>/dev/null; then
+    sudo apt-get install strings -qq -y > /dev/null 2>&1
+  else
+    echo [#] "strings is already installed."
+  fi
+}
+
+
+
+
+
+ function download() {
+	 
+	 
+    volatility_path=$(sudo find / -name volatility_2.6_lin64_standalone 2>/dev/null)
+
+    if [ -z "$volatility_path" ]; then
+
+        wget "http://downloads.volatilityfoundation.org/releases/2.6/volatility_2.6_lin64_standalone.zip" &>/dev/null
+        unzip -o volatility_2.6_lin64_standalone.zip &>/dev/null
+        sudo chmod -R +wxr volatility_2.6_lin64_standalone &>/dev/null
+        echo "[#] Volatility installed successfully."
+    else
+        echo "[#] Volatility is already installed."
+    fi
+}
+
+function create_directory() {
+
+   
+    sudo mkdir -m 777 "all_directorys"
+    directory_path=$(sudo find / -type d -name all_directorys 2>/dev/null)
+    echo "[#] $directory_path now created " 
+    cd "$directory_path"
+}
+
+
+function binwalk_analysis() {
+	
+	filename="$1"
+	
+	file_path=$(sudo find / -type f -name "$filename" 2>/dev/null)
+	binwalk_path=$(sudo find / -type d -name binwalk_data 2>/dev/null)
+	direcotry_path=$(sudo find / -type d -name all_directorys 2>/dev/null)
+	
+	
+
+    if [ ! -d "$binwalk_path" ]; 
+    then
+        sudo mkdir -m 777 "binwalk_data"
+    fi
+    
+    echo "[#] Carving with binwalk "
+    binwalk "$file_path" > "binwalk_data/binwalk.txt"
+}
+
+
+function foremost_analysis() {
+    filename="$1"
+    file_path=$(sudo find / -type f -name "$filename" 2>/dev/null)
+    foremost_path=$(sudo find / -type d -name foremost_data 2>/dev/null)
+
+    if [ ! -d "foremost_data" ]; then
+        sudo mkdir -m 777 "foremost_data"
+        cd "foremost_data"
+    fi
+
+    echo "[#] Carving with foremost"
+    foremost -t all -i "$file_path" -o "foremost_analys" &>/dev/null
+    sudo chmod -R +rwx "foremost_analys"
+ 
+}
+
+function bulk_analysis() {
+    filename="$1"
+    file_path=$(sudo find / -type f -name "$filename" 2>/dev/null)
+    bulk_path=$(sudo find / -type d -name bulk_data 2>/dev/null)
+
+    if [ ! -d "bulk_data" ]; then
+        cd ..
+        mkdir -m 777 "bulk_data"
+        cd "bulk_data" || exit 1
+    fi
+
+    echo "[#] Carving with bulk"
+    sudo bulk_extractor "$file_path" -o "bulk_analys" &>/dev/null
+}
+	
+	function file.pcap() {
+	
+	file_pcap=$(sudo find / -type d -name "bulk_analys" -exec find {} -type f -name "*.pcap" \; 2>/dev/null)
+	
+	if [ -n "$file_pcap" ];
+    then		
+		echo "[#] found traffic: $file_pcap (Size: $(ls -lh "$file_pcap" | grep -i "pcap" | awk '{print $5}'))"
+	else 
+	    echo "[#] found traffic"
+
+	fi
+
+}
+
+function strings_analysis() {
+    filename="$1"
+    file_path=$(sudo find / -type f -name "$filename" 2>/dev/null)
+
+    strings_path="Strings_data"
+    if [ ! -d "$strings_path" ]; then
+        cd ..
+        mkdir -m 777 "$strings_path"
+    fi
+
+    echo "[#] Carving with strings"
+    strings "$file_path" | grep -i "password" >"$strings_path/password.txt"
+    strings "$file_path" | grep -i "username" >"$strings_path/username.txt"
+    strings -a "$file_path" | grep -i "\.exe" >"$strings_path/exe.txt"
+    strings -a "$file_path" | grep -i '\\etc\\' >"$strings_path/etc.txt"
+}
+
+function volatility_analysis() {
+	
+    filename="$1"
+    file_path=$(sudo find / -type f -name "$filename" 2>/dev/null)
+    volatility_path=$(sudo find / -type f -name volatility_2.6_lin64_standalone 2>/dev/null)
+    volatility_directory=$(sudo find / -type d -name volatility_data 2>/dev/null)
+    
+    # Determine the profile using imageinfo and extract suggested profile
+    profile=$("$volatility_path" 2>/dev/null -f "$file_path" imageinfo  | awk -F ': ' '/Suggested Profile\(s\) :/ {gsub(/,/, "", $2); print $2}' | sed 's/^\s*//; s/\s*$//' | awk '{print $1}')
+
+    if [ -z "$profile" ]; 
+	then
+		echo "ERROR: Unable to determine the profile. Exiting."
+		exit 1
+    else
+		echo "[#] Found imageinfo: $profile"
+    fi
+    
+    if [ ! -d "$volatility_directory" ]; then
+        mkdir -m 777 "volatility_data"
+    fi
+
+    echo "[#] Carving with Volatility using profile: $profile"
+    echo "[#] start to Carving with Volatility using: pslist,psscan,connections,sockets,dumpregistry."
+    sudo "$volatility_path" 2>/dev/null -f "$file_path" --profile="$profile" pslist > "volatility_data/proces_pslist.txt"
+    sudo "$volatility_path" 2>/dev/null -f "$file_path" --profile="$profile" psscan > "volatility_data/proces_psscan.txt"
+    sudo "$volatility_path" 2>/dev/null -f "$file_path" --profile="$profile" connections > "volatility_data/network_connections.txt"
+    sudo "$volatility_path" 2>/dev/null -f "$file_path" --profile="$profile" sockets > "volatility_data/network_sockets.txt"
+    sudo "$volatility_path" 2>/dev/null -f "$file_path" --profile="$profile" c --dump-dir="volatility_data" &>/dev/null
+    
+    
+}
+
+function display_statistics() {
+    filename="$1"
+
+    statistics=$(sudo find / -type d -name "statistics_data" 2>/dev/null)
+    
+    alldirectorys_path=$(sudo find / -type d -name all_directorys 2>/dev/null)
+    alldirectory=$(sudo find "$alldirectorys_path" -type f | wc -l)
+
+    binwalk_path=$(sudo find / -type d -name binwalk_data 2>/dev/null)
+    binwalk=$(sudo find "$binwalk_path" -type f | wc -l)
+
+    foremost_path=$(sudo find / -type d -name foremost_data 2>/dev/null)
+    foremost=$(sudo find "$foremost_path" -type f | wc -l)
+
+    bulk_path=$(sudo find / -type d -name bulk_data 2>/dev/null)
+    bulk=$(sudo find "$bulk_path" -type f | wc -l)
+
+    strings_path=$(sudo find / -type d -name Strings_data 2>/dev/null)
+    strings=$(sudo find "$strings_path" -type f | wc -l)
+
+    volatility_path=$(sudo find / -type d -name volatility_data 2>/dev/null)
+    volatility=$(sudo find "$volatility_path" -type f | wc -l)
+
+    echo "[#] [$binwalk files (binwalk)] [$foremost files (foremost)] [$bulk files (bulk)] [$strings files (strings)] [$volatility files (volatility)]"
+
+    if [ ! -d "$statistics" ]; then
+        mkdir -m 777 "statistics_data"
+    fi
+
+    report_file="statistics_data/report_file.txt"
+
+    echo "[#] Analysis Report" >"$report_file"
+    echo "[#] Date and Time of Analysis: $(date)" >>"$report_file"
+    echo "[#] File Analyzed: $filename" >>"$report_file"
+    echo "[#] Number of Files in All Directories: $alldirectory" >>"$report_file"
+    echo "[#] Number of Files in Binwalk Data: $binwalk" >>"$report_file"
+    echo "[#] Number of Files in Foremost Data: $foremost" >>"$report_file"
+    echo "[#] Number of Files in Bulk Data: $bulk" >>"$report_file"
+    echo "[#] Number of Files in Strings Data: $strings" >>"$report_file"
+    echo "[#] Number of Files in Volatility Data: $volatility" >>"$report_file"
+    echo "[#] $(date) - Time of Analysis" >>"$report_file"
+
+    echo "[#] Report saved to: $report_file"
+    
+}
+
+function zip_directories() {
+    echo "[#] Zipping all directories"
+    current_directory=$(pwd)
+    cd ..
+    zip -r all_directorys.zip all_directorys &>/dev/null
+
+    if [ $? -eq 0 ]; then
+        echo "[#] Successfully created all_directorys.zip"
+    else
+        echo "[#] Failed to create all_directorys.zip"
+    fi
+}
+
+function rm(){
+	
+	all_path=$(sudo find / -name all_directorys 2>/dev/null) 
+	
+	sudo rm -r "$all_path"
+	echo "[#] $(date) - time of analysis"
+}	
+	
+root
+check_file_exists
+nba1
+download
+create_directory
+binwalk_analysis "$filename"
+foremost_analysis "$filename"
+bulk_analysis "$filename"
+file.pcap "$filename"
+strings_analysis "$filename"
+volatility_analysis "$filename"
+display_statistics "$filename"
+zip_directories
+rm
